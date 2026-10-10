@@ -202,6 +202,13 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     ui.menu_button(&root.label, |ui| {
                         for c in &root.children {
                             menu_node(app, ui, c, &extra);
+                            if root.label == "File"
+                                && catalog::implemented_by(&c.path, &extra).as_deref() == Some("session.revert")
+                                && let Some(section) = &mut app.services.file_menu
+                            {
+                                section(ui, !app.engine.transport.recording);
+                                ui.separator();
+                            }
                         }
                         if root.label == "AudioSuite" {
                             ui.separator();

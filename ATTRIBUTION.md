@@ -44,3 +44,9 @@ and, at runtime, the operating system's own UI fonts when available (never redis
 | `assets/app-icon/soundcraft.ico` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/` | SoundCraft contributors | original, rendered from `icon.svg` (16–512 px PNGs and the scalable SVG) | MIT OR Apache-2.0 |
 | `docs/images/` | SoundCraft contributors | screenshots of SoundCraft rendered from the synthesised demo session | MIT OR Apache-2.0 |
+
+### Shared Sovereign Cloud
+
+| Asset | Author | Source | License |
+|---|---|---|---|
+| `vendor/sovereign-cloud-ui/assets/icp/logo.svg` | DFINITY Foundation | [DFINITY documentation favicon](https://github.com/dfinity/developer-docs/blob/2e48927666fb50d15a5c874aca4b64f50e584708/public/favicon.svg), viewBox cropped to the infinity mark | Apache-2.0; license and provenance included beside the asset |

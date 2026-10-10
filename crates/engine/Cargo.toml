@@ -8,6 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+zip = { version = "0.6", default-features = false }
 soundcraft-time.workspace = true
 soundcraft-audio-io.workspace = true
 soundcraft-midi.workspace = true

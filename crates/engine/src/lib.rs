@@ -87,7 +87,12 @@ struct HistoryEntry {
 }
 
 /// Engine state: the document, history, clipboard and transport plumbing.
+static NEXT_DOCUMENT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub mod portable;
+
 pub struct Engine {
+    document_id: u64,
     doc: Arc<Session>,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
@@ -118,6 +123,7 @@ impl Engine {
     pub fn new(session: Session) -> Self {
         install_panic_hook();
         Engine {
+            document_id: NEXT_DOCUMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             doc: Arc::new(session),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -150,7 +156,12 @@ impl Engine {
     }
 
     /// Replace the whole document (open / new); clears history.
+    pub fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
     pub fn replace_session(&mut self, s: Session) {
+        self.document_id = NEXT_DOCUMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.doc = Arc::new(s);
         self.undo.clear();
         self.redo.clear();

@@ -4,6 +4,14 @@ SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at ful
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This file is
 the honest status: what works today, what is missing, and how far we are.
 
+## Browser cloud integration (2026-10-10, subnet.ee fork)
+
+The optional `icp-cloud` web feature shares Sovereign Cloud sign-in, Save, Save As and
+Open with the other Craft editors. Portable `.scraft.zip` projects carry editable
+session metadata and lossless float audio, with bounded parsing and no external file
+reads. Linked video remains unsupported by this portable format. Local/native saving
+continues to use `.scraft` plus its Audio Files folder.
+
 ## Where we are (2026-10-07)
 
 | Measure | Value | How |

@@ -27,3 +27,6 @@ fn main() {
 fn main() {
     eprintln!("soundcraft-web only runs in the browser: build it with `trunk build --release` in apps/soundcraft-web");
 }
+
+#[cfg(all(target_arch = "wasm32", feature = "icp-cloud"))]
+mod cloud;

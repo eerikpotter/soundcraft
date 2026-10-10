@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["vendor"]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*", "xtask"]

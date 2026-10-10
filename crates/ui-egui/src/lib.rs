@@ -149,6 +149,8 @@ impl Default for UiState {
 /// Host services (file dialogs) injected by the app; absent in tests and on the web.
 #[derive(Default)]
 pub struct Services {
+    /// Optional host-provided File menu section (for example, cloud storage).
+    pub file_menu: Option<Box<dyn FnMut(&mut egui::Ui, bool)>>,
     pub pick_open: Option<Box<dyn Fn(&str, &[&str]) -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
 }

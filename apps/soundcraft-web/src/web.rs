@@ -35,8 +35,20 @@ pub fn start() {
                     }
                     let engine = if query().contains("empty") { Engine::default() } else { soundcraft_engine::demo::demo_engine() };
                     let player = soundcraft_playback::Player::new(Arc::new(engine.session().clone()));
-                    let app = SoundApp::new(engine, Some(player), Services::default());
-                    Ok(Box::new(WebShell(app)))
+                    #[cfg_attr(not(feature = "icp-cloud"), allow(unused_mut))]
+                    let mut app = SoundApp::new(engine, Some(player), Services::default());
+                    #[cfg(feature = "icp-cloud")]
+                    let cloud = {
+                        let cloud = sovereign_cloud_ui::Cloud::new(sovereign_cloud_ui::AppSpec::SOUND, cc.egui_ctx.clone());
+                        let menu = cloud.menu_handle();
+                        app.services.file_menu = Some(Box::new(move |ui, has_doc| menu.ui(ui, has_doc)));
+                        cloud
+                    };
+                    Ok(Box::new(WebShell(
+                        app,
+                        #[cfg(feature = "icp-cloud")]
+                        cloud,
+                    )))
                 }),
             )
             .await;
@@ -53,11 +65,12 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
-struct WebShell(SoundApp);
+struct WebShell(SoundApp, #[cfg(feature = "icp-cloud")] sovereign_cloud_ui::Cloud);
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.0.logic(ctx);
+        publish_dirty_state(self.0.engine.is_dirty() || self.0.engine.transport.recording);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -66,5 +79,18 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        #[cfg(feature = "icp-cloud")]
+        self.1.ui(ui.ctx(), &mut crate::cloud::Adapter(&mut self.0));
+        publish_dirty_state(self.0.engine.is_dirty() || self.0.engine.transport.recording);
+    }
+}
+
+/// Browser-host contract: report unsaved work without exposing document contents.
+fn publish_dirty_state(dirty: bool) {
+    if let Some(root) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element()) {
+        let value = if dirty { "true" } else { "false" };
+        if root.get_attribute("data-craft-dirty").as_deref() != Some(value) {
+            let _ = root.set_attribute("data-craft-dirty", value);
+        }
     }
 }
