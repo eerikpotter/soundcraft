@@ -9,7 +9,7 @@
   "src/controller.rs": "7482f4d72f711e1b59d86eab33abd84d9f45c7d6813134bc28edecd246ba6f3f",
   "src/flow.rs": "842ddcd7d90e044fe77b3cd8f9780b92fd0d6607b5a6f26637bee21c61d1483f",
   "src/lib.rs": "ffabcafc7c5c843c2cc2f66a2c3fbdbd74fe7f468a32923a68a7a055f8cba776",
-  "src/panel.rs": "9b8d1e195e37697d3141e43a305e9780da48c747e5fdba495fcdd3dfe81b89cf",
+  "src/panel.rs": "eecb68296acb334a9898fc322f5ab36912bb385bcb6d71cc48515d088b731a15",
   "src/presentation.rs": "25a0d371a049fb76b5448bc6b64c511a605e7f605dc8a556a8959c3fcedb539d",
   "src/session.rs": "2208b2ab5ff0cbb8ae1e1b139d531d02f981468b1368c46d5a03bca5eefd5ce8",
   "assets/icp/LICENSE": "9d817bb53415c925f59f89bea66235253307ed8a471e119b65932bc3eeb5447d",

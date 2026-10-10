@@ -82,7 +82,7 @@ impl Cloud {
                     ui.label("File → Sovereign Cloud → Save saves here. File → Save / Export downloads a local copy. Save before closing or reloading; cloud saving is manual.");
                     ui.label("Demo limits: 64 MiB per file; 256 MiB per account including versions; 20 files, 20 versions each; 2 GiB across the service.");
                     ui.label("Files are access-controlled, not end-to-end encrypted. The service controller can upgrade the backend.");
-                    ui.hyperlink_to("Source and architecture", "https://github.com/eerikpotter/subnet-cloud");
+            ui.hyperlink_to("Source and architecture", "https://github.com/eerikpotter/subnet.ee");
                 });
             });
         self.visible = visible;
