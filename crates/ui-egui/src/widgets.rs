@@ -1,30 +1,39 @@
 //! Small custom widgets in the studio style.
 
+use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
+
 use crate::icons;
 use crate::theme::{Tokens, bold, regular};
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
+/// Local colors for shared icon-button interaction; transport-specific states stay in the toolbar.
+fn button_style(selected_fill: Color32, normal_icon: Color32, radius: u8) -> IconButtonStyle {
+    let t = Tokens::current();
+    let visuals = |fill, icon| ButtonVisuals { fill, stroke: Stroke::new(1.0, t.button_border), icon };
+    IconButtonStyle {
+        normal: visuals(t.button, normal_icon),
+        hovered: visuals(t.button_hi, normal_icon),
+        pressed: None,
+        selected: visuals(selected_fill, Color32::WHITE),
+        corner_radius: CornerRadius::same(radius),
+        focus_stroke: Stroke::new(1.0, t.accent),
+    }
+}
+
 /// A toolbar button with an icon; `on` draws the blue selected state.
 pub fn icon_button(ui: &mut Ui, size: egui::Vec2, icon: &str, on: bool, tip: &str) -> Response {
-    let t = Tokens::DARK;
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    let fill = if on {
-        t.accent
-    } else if resp.hovered() {
-        t.button_hi
-    } else {
-        t.button
-    };
-    ui.painter().rect(r, CornerRadius::same(3), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-    let col = if on { Color32::WHITE } else { t.text };
-    let s = r.height().min(r.width()) * 0.78;
-    icons::draw(ui.painter(), Rect::from_center_size(r.center(), vec2(s, s)), icon, col);
+    let t = Tokens::current();
+    let style = button_style(t.accent, t.text, 3);
+    let resp = IconButton::new(tip, size, &style).selected(on).single_shape_frame().show(ui, |ui, r, tint| {
+        let s = r.height().min(r.width()) * 0.78;
+        icons::draw(ui.painter(), Rect::from_center_size(r.center(), vec2(s, s)), icon, tint);
+    });
     resp.on_hover_text(tip)
 }
 
 /// Square text toggle used for S / M / I / record etc.
 pub fn text_toggle(ui: &mut Ui, size: egui::Vec2, text: &str, on: bool, on_color: Color32, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     let fill = if on {
         on_color
@@ -39,25 +48,23 @@ pub fn text_toggle(ui: &mut Ui, size: egui::Vec2, text: &str, on: bool, on_color
     resp.on_hover_text(tip)
 }
 
-/// Record-enable button (red dot).
+/// Record-enable button (red dot); the caller owns track arming and command dispatch.
 pub fn rec_toggle(ui: &mut Ui, size: egui::Vec2, on: bool, tip: &str) -> Response {
-    let t = Tokens::DARK;
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    let fill = if on {
-        t.rec
-    } else if resp.hovered() {
-        t.button_hi
-    } else {
-        t.button
-    };
-    ui.painter().rect(r, CornerRadius::same(2), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-    ui.painter().circle_filled(r.center(), size.y * 0.24, if on { Color32::WHITE } else { Color32::from_rgb(190, 190, 190) });
+    let style = button_style(Tokens::current().rec, Color32::from_rgb(190, 190, 190), 2);
+    let resp = IconButton::new(tip, size, &style).selected(on).single_shape_frame().show(ui, |ui, r, tint| {
+        ui.painter().circle_filled(r.center(), size.y * 0.24, tint);
+    });
     resp.on_hover_text(tip)
 }
 
 /// A dropdown-looking selector box. Returns the response (caller opens a menu on click).
 pub fn selector_box(ui: &mut Ui, width: f32, height: f32, text: &str, color: Color32) -> Response {
-    let t = Tokens::DARK;
+    selector_box_with_tooltip(ui, width, height, text, color, text)
+}
+
+/// A selector with a compact visible label and the complete meaning on hover.
+pub(crate) fn selector_box_with_tooltip(ui: &mut Ui, width: f32, height: f32, text: &str, color: Color32, tooltip: &str) -> Response {
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     ui.painter().rect(
         r,
@@ -68,15 +75,20 @@ pub fn selector_box(ui: &mut Ui, width: f32, height: f32, text: &str, color: Col
     );
     let tr = Rect::from_min_max(pos2(r.max.x - height * 0.8, r.min.y), r.max);
     icons::draw(ui.painter(), tr.shrink(height * 0.15), "triangle_down", t.text_dim);
-    let galley = ui.painter().layout(text.to_string(), regular((height * 0.62).clamp(8.0, 12.0)), color, (width - height).max(10.0));
-    let pos = pos2(r.min.x + (r.width() - height * 0.6 - galley.size().x) * 0.5, r.center().y - galley.size().y * 0.5);
+    let text_rect = Rect::from_min_max(r.min + vec2(3.0, 1.0), pos2(tr.left() - 2.0, r.bottom() - 1.0));
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), regular((height * 0.62).clamp(8.0, 12.0)), color, text_rect.width().max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.painter().layout_job(job);
+    let pos = text_rect.center() - galley.size() * 0.5;
     ui.painter().with_clip_rect(r.shrink(1.0)).galley(pos, galley, color);
-    resp
+    resp.on_hover_text(tooltip)
 }
 
 /// Rotary knob for pan / send pan (-1..1). Drag vertically; double-click resets.
 pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
     if resp.dragged() {
         let d = resp.drag_delta();
@@ -87,7 +99,7 @@ pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response 
     }
     let c = r.center();
     let rad = size * 0.42;
-    ui.painter().circle(c, rad, Color32::from_rgb(26, 26, 28), Stroke::new(1.0, Color32::from_rgb(90, 90, 94)));
+    ui.painter().circle(c, rad, t.knob_bg, Stroke::new(1.0, t.knob_ring));
     let n = 24;
     let start = std::f32::consts::PI * 0.75;
     let sweep = std::f32::consts::PI * 1.5;
@@ -104,7 +116,7 @@ pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response 
     let (a0, a1) = if at < mid { (at, mid) } else { (mid, at) };
     ui.painter().add(egui::Shape::line(arc(a0, a1), Stroke::new(2.0, t.counter_text)));
     let tip_pos = c + vec2(at.cos(), at.sin()) * rad * 0.85;
-    ui.painter().line_segment([c, tip_pos], Stroke::new(2.0, Color32::from_rgb(230, 230, 230)));
+    ui.painter().line_segment([c, tip_pos], Stroke::new(2.0, t.knob_pointer));
     resp.on_hover_text(tip)
 }
 
@@ -120,8 +132,8 @@ pub fn pan_text(v: f32) -> String {
 
 /// Vertical peak meter with green/yellow/red zones; values are linear peaks.
 pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
-    let t = Tokens::DARK;
-    ui.painter().rect_filled(r, 0.0, Color32::from_rgb(8, 8, 8));
+    let t = Tokens::current();
+    ui.painter().rect_filled(r, 0.0, t.meter_bg);
     let pos = |v: f32| -> f32 {
         let db = if v <= 1e-6 { -80.0 } else { 20.0 * v.log10() };
         meter_pos(db)
@@ -151,7 +163,7 @@ pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
         );
     }
     let clip_r = Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 2.5));
-    ui.painter().rect_filled(clip_r, 0.0, if clip { t.meter_red } else { Color32::from_rgb(60, 20, 20) });
+    ui.painter().rect_filled(clip_r, 0.0, if clip { t.meter_red } else { t.meter_clip_off });
 }
 
 /// dB → 0..1 meter position (logarithmic-ish scale like hardware meters).
@@ -172,9 +184,20 @@ pub fn meter_pos(db: f32) -> f32 {
     }
 }
 
+/// Clip gain fader taper: the top three quarters span -36..+36 dB evenly, the rest compresses to -144.
+pub fn clip_gain_from_pos(pos: f32) -> f32 {
+    let p = if pos.is_finite() { pos.clamp(0.0, 1.0) } else { 0.0 };
+    if p >= 0.25 { -36.0 + (p - 0.25) / 0.75 * 72.0 } else { -36.0 - (1.0 - p / 0.25).powf(1.5) * 108.0 }
+}
+
+pub fn clip_gain_to_pos(db: f32) -> f32 {
+    let db = if db.is_finite() { db.clamp(-144.0, 36.0) } else { -144.0 };
+    if db >= -36.0 { 0.25 + (db + 36.0) / 72.0 * 0.75 } else { (1.0 - ((-36.0 - db) / 108.0).powf(1.0 / 1.5)) * 0.25 }
+}
+
 /// A fader: returns the new dB value when dragged. `db` in -144..12.
 pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let resp = ui.interact(r, id, Sense::click_and_drag());
     let slot = Rect::from_center_size(r.center(), vec2(5.0, r.height() - 14.0));
     ui.painter().rect_filled(slot, 2.0, t.fader_track);
@@ -237,7 +260,7 @@ pub enum PannerEdit {
 /// Drag moves the puck; double-click returns it to front centre; Alt-drag (or the slider below)
 /// sets divergence; height layouts get a second slider for elevation. Returns the edit, if any.
 pub fn surround_panner(ui: &mut Ui, size: f32, speakers: &[PannerSpeaker], puck: (f32, f32), divergence: f32, z: Option<f32>) -> Option<PannerEdit> {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let mut edit = None;
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
     let half = size * 0.5 - 6.0;
@@ -335,12 +358,226 @@ pub fn multi_meter(ui: &Ui, r: Rect, levels: &[f32], labels: &[String], clip: bo
         let br = Rect::from_min_size(pos2(x, mr.min.y), vec2(w, mr.height()));
         meter(ui, br, *lv, *lv, clip);
         if let Some(l) = labels.get(i) {
-            let galley = ui.painter().layout_no_wrap(l.clone(), regular(7.0), Tokens::DARK.text_dim);
+            let galley = ui.painter().layout_no_wrap(l.clone(), regular(7.0), Tokens::current().text_dim);
             let gw = galley.size().x;
             let gh = galley.size().y;
             // Rotated 90° anticlockwise, reading bottom-to-top, centred under the bar.
             let pos = pos2(br.center().x - gh * 0.5, mr.max.y + 2.0 + gw.min(label_h - 2.0));
-            ui.painter().add(egui::epaint::TextShape::new(pos, galley, Tokens::DARK.text_dim).with_angle(-std::f32::consts::FRAC_PI_2));
+            ui.painter().add(egui::epaint::TextShape::new(pos, galley, Tokens::current().text_dim).with_angle(-std::f32::consts::FRAC_PI_2));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clip_gain_from_pos, clip_gain_to_pos};
+
+    #[test]
+    fn clip_gain_taper_spans_minus_144_to_plus_36_and_round_trips() {
+        assert_eq!(clip_gain_from_pos(0.0), -144.0);
+        assert_eq!(clip_gain_from_pos(1.0), 36.0);
+        assert_eq!(clip_gain_from_pos(f32::NAN), -144.0);
+        assert_eq!(clip_gain_to_pos(f32::INFINITY), 0.0);
+        for db in [-144.0, -90.0, -36.0, -12.5, 0.0, 6.0, 36.0] {
+            assert!((clip_gain_from_pos(clip_gain_to_pos(db)) - db).abs() < 0.01, "{db}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod selector_visual_regressions {
+    use super::*;
+
+    fn scaled_input(size: egui::Vec2, scale: f32) -> egui::RawInput {
+        let mut input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(scale);
+        input
+    }
+
+    #[test]
+    fn capture_selector_visual_fixtures() {
+        let _palette = crate::theme::lock_test_palette();
+        let Some(directory) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&directory).unwrap();
+        for scale in [1.0, 1.5, 2.0] {
+            let mut ready = false;
+            let mut harness = egui_kittest::Harness::builder().with_size(vec2(320.0, 120.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
+                move |ui, regions: &mut serde_json::Map<String, serde_json::Value>| {
+                    if !ready {
+                        crate::fonts::install(ui.ctx());
+                        crate::theme::apply(ui.ctx(), false);
+                        ready = true;
+                        return;
+                    }
+                    regions.clear();
+                    for (index, label) in ["auto read", "no group", "A very long mixer group name"].into_iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            for width in [46.0, 74.0, 110.0] {
+                                let r = selector_box(ui, width, 16.0, label, Tokens::current().text).rect;
+                                regions.insert(format!("selector-{index}-{width}"), serde_json::json!([r.left(), r.top(), r.width(), r.height()]));
+                            }
+                        });
+                    }
+                },
+                serde_json::Map::new(),
+            );
+            harness.input_mut().max_texture_side = Some(8192);
+            harness.run_steps(4);
+            let stem = format!("soundcraft-selectors-dark-{scale}x");
+            harness.render().unwrap().save(directory.join(format!("{stem}.png"))).unwrap();
+            std::fs::write(
+                directory.join(format!("{stem}.json")),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "screen": [320.0, 120.0], "scale": scale, "regions": harness.state()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    fn mixer_app(narrow: bool, mode: soundcraft_model::AutomationMode) -> crate::SoundApp {
+        let mut app = crate::SoundApp::new(soundcraft_engine::Engine::default(), None, Default::default());
+        app.run("track.new", serde_json::json!({"name": "Voice"})).unwrap();
+        app.run("track.new", serde_json::json!({"name": "Music"})).unwrap();
+        let ids: Vec<_> = app.engine.session().tracks.iter().map(|track| track.id).collect();
+        for id in ids {
+            app.run("mix.automation_mode", serde_json::json!({"track": id.0, "mode": mode.label()})).unwrap();
+        }
+        app.ui.narrow_mix = narrow;
+        app.ui.show_tracks_list = false;
+        app.ui.mix_views = vec!["io".into()];
+        app
+    }
+
+    #[test]
+    fn actual_mixer_keeps_every_active_automation_mode_legible() {
+        let _palette = crate::theme::lock_test_palette();
+        for narrow in [false, true] {
+            for mode in soundcraft_model::AutomationMode::ALL {
+                for scale in [1.0, 1.5, 2.0] {
+                    let ctx = egui::Context::default();
+                    crate::fonts::install(&ctx);
+                    crate::theme::apply(&ctx, false);
+                    let mut app = mixer_app(narrow, mode);
+                    let mut output = ctx.run_ui(scaled_input(vec2(320.0, 640.0), scale), |ui| crate::mix_window::show(&mut app, ui));
+                    output.textures_delta.clear();
+                    assert_eq!(ctx.content_rect().size(), vec2(320.0, 640.0));
+                    assert_eq!(ctx.pixels_per_point(), scale);
+                    let long = format!("auto {}", mode.label());
+                    let short = if mode == soundcraft_model::AutomationMode::TouchLatch { "t/l" } else { mode.label() };
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if text.galley.job.text == long || text.galley.job.text == mode.label() || text.galley.job.text == short =>
+                            {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(texts.len(), 2, "both tracks paint their automation mode: {mode:?}");
+                    for text in texts {
+                        assert_eq!(text.galley.rows.len(), 1, "{mode:?} narrow={narrow} at {scale}x: automation text wraps");
+                        assert!(
+                            !text.galley.elided,
+                            "{mode:?} narrow={narrow} at {scale}x: the active mode must remain distinguishable without hovering"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capture_actual_mixer_visual_fixtures() {
+        let _palette = crate::theme::lock_test_palette();
+        let Some(directory) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&directory).unwrap();
+        for mode in soundcraft_model::AutomationMode::ALL {
+            for narrow in [false, true] {
+                for scale in [1.0, 1.5, 2.0] {
+                    let mut ready = false;
+                    let mut harness =
+                        egui_kittest::Harness::builder().with_size(vec2(320.0, 640.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
+                            move |ui, app: &mut crate::SoundApp| {
+                                if !ready {
+                                    crate::fonts::install(ui.ctx());
+                                    crate::theme::apply(ui.ctx(), false);
+                                    ready = true;
+                                    return;
+                                }
+                                crate::mix_window::show(app, ui);
+                            },
+                            mixer_app(narrow, mode),
+                        );
+                    harness.input_mut().max_texture_side = Some(8192);
+                    harness.run_steps(4);
+                    let stem = format!("soundcraft-mixer-narrow-{narrow}-{}-{scale}x", mode.label().replace('/', "-"));
+                    harness.render().unwrap().save(directory.join(format!("{stem}.png"))).unwrap();
+                    let strips = harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if (rect.rect.width() - crate::mix_window::strip_width(narrow)).abs() < 0.1 && rect.rect.height() >= 560.0 =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .fold(Rect::NOTHING, Rect::union);
+                    assert!(strips.is_finite());
+                    std::fs::write(
+                        directory.join(format!("{stem}.json")),
+                        serde_json::to_vec_pretty(&serde_json::json!({
+                            "screen": [320.0, 640.0], "scale": scale, "mode": mode.label(), "narrow": narrow,
+                            "regions": {"mixer-selectors": [strips.left(), strips.top(), strips.width(), 120.0]}
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_mixer_selectors_keep_labels_on_one_visible_line() {
+        let _palette = crate::theme::lock_test_palette();
+        for width in [46.0, 74.0, 110.0] {
+            for label in ["auto read", "no group", "A very long mixer group name"] {
+                for scale in [1.0, 1.5, 2.0] {
+                    let ctx = egui::Context::default();
+                    crate::fonts::install(&ctx);
+                    crate::theme::apply(&ctx, false);
+                    let mut rect = Rect::NOTHING;
+                    let mut output = ctx.run_ui(scaled_input(vec2(320.0, 120.0), scale), |ui| {
+                        rect = selector_box(ui, width, 16.0, label, Tokens::current().text).rect;
+                    });
+                    output.textures_delta.clear();
+                    assert_eq!(ctx.content_rect().size(), vec2(320.0, 120.0));
+                    assert_eq!(ctx.pixels_per_point(), scale);
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => Some(text),
+                            _ => None,
+                        })
+                        .expect("selector label is painted");
+                    assert_eq!(text.galley.rows.len(), 1, "{label:?} at {width} must not wrap into clipped rows");
+                    let bounds = text.visual_bounding_rect();
+                    assert!(bounds.top() >= rect.top() && bounds.bottom() <= rect.bottom(), "{label:?}: {bounds:?} outside {rect:?}");
+                    assert!(
+                        bounds.left() >= rect.left() && bounds.right() <= rect.right() - 16.0 * 0.8,
+                        "text must leave room for the dropdown arrow"
+                    );
+                }
+            }
         }
     }
 }

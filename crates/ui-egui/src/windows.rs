@@ -7,6 +7,7 @@ use serde_json::json;
 use soundcraft_model::{AutomationMode, ClipContent};
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+    audio_health(app, ctx);
     automation(app, ctx);
     color_palette(app, ctx);
     disk_usage(app, ctx);
@@ -21,6 +22,60 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     io_setup(app, ctx);
     shortcuts_window(app, ctx);
     clip_effects(app, ctx);
+}
+
+fn audio_health(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_audio_health;
+    win(ctx, &mut open, "Session Audio Health", vec2(620.0, 360.0), |ui| {
+        let refresh = ui.button("Refresh Report").clicked();
+        if app.audio_health_report.is_none() || refresh {
+            app.audio_health_report = Some(app.engine.execute("session.audio_health", &json!({})).map_err(|error| error.to_string()));
+        }
+        let Some(result) = &app.audio_health_report else { return };
+        match result {
+            Ok(report) => {
+                ui.label(format!("{} audio clips checked · {} issues", report["audio_clips"], report["issue_count"]));
+                ui.label(match report["active_audio_end_seconds"].as_f64() {
+                    Some(seconds) => format!("Active audio ends at {seconds:.2} seconds"),
+                    None => "Active audio end time is unknown (invalid session sample rate)".into(),
+                });
+                ui.label("Includes alternate takes and muted clips. Refresh after editing.");
+                ui.separator();
+                if report["healthy"] == true {
+                    ui.label("All audio clips have loaded media within source bounds.");
+                }
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    if let Some(issues) = report["issues"].as_array() {
+                        for issue in issues {
+                            ui.group(|ui| {
+                                let text = |key: &str| issue[key].as_str().unwrap_or("");
+                                ui.label(format!(
+                                    "{} / {} / {}{}",
+                                    text("track"),
+                                    text("playlist"),
+                                    text("clip"),
+                                    if issue["active"] == true { "" } else { " (alternate playlist)" }
+                                ));
+                                ui.label(text("message"));
+                                if let Some(path) = issue["path"].as_str() {
+                                    ui.label(path);
+                                }
+                            });
+                        }
+                    }
+                });
+                ui.separator();
+                ui.label("Checks loaded media only, not files on disk, signal levels, plugins or routing.");
+            }
+            Err(error) => {
+                ui.label(error.to_string());
+            }
+        }
+    });
+    app.ui.show_audio_health = open;
+    if !open {
+        app.audio_health_report = None;
+    }
 }
 
 fn win(ctx: &egui::Context, open: &mut bool, title: &str, size: egui::Vec2, body: impl FnOnce(&mut egui::Ui)) {
@@ -125,7 +180,9 @@ fn task_manager(app: &mut SoundApp, ctx: &egui::Context) {
     win(ctx, &mut open, "Task Manager", vec2(320.0, 120.0), |ui| {
         ui.label("No background tasks are running.");
         ui.label(
-            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.").small().color(Tokens::DARK.text_dim),
+            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.")
+                .small()
+                .color(Tokens::current().text_dim),
         );
     });
     app.ui.show_task_manager = open;
@@ -293,7 +350,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                     if is_dir {
                         app.ui.workspace_dir = path;
                     } else if name.ends_with(".scraft") {
-                        let _ = app.run("session.open", json!({"path": path}));
+                        let _ = crate::dialogs::run_or_ask(app, "session.open", json!({"path": path}));
                     } else if name.ends_with(".mid") || name.ends_with(".midi") {
                         let _ = app.run("file.import_midi", json!({"path": path}));
                     } else {
@@ -326,9 +383,15 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button(format!("{}  {name}", i + 1)).clicked()
                     && let Ok(mut st) = serde_json::from_value::<crate::UiState>(v.clone())
                 {
-                    st.configurations = app.ui.configurations.clone();
-                    st.show_configurations = true;
-                    app.ui = st;
+                    if let Err(error) = st.docking.validate().and_then(|()| st.mix_docking.validate_mix()) {
+                        app.ui.status = format!("Window configuration could not be restored: {error}");
+                    } else {
+                        st.configurations = app.ui.configurations.clone();
+                        st.theme = app.ui.theme;
+                        st.show_configurations = true;
+                        crate::docking::cancel_replaced_state(app, &st);
+                        app.ui = st;
+                    }
                 }
                 if ui.small_button("✕").clicked() {
                     app.ui.configurations.remove(i);
@@ -388,11 +451,11 @@ pub fn io_setup(app: &mut SoundApp, ctx: &egui::Context) {
                 let r = ui.text_edit_singleline(&mut edit);
                 ui.ctx().memory_mut(|m| m.data.insert_temp(key, edit.clone()));
                 if r.lost_focus() && edit != name {
-                    let _ = app.run("mix.bus_rename", json!({"bus": name, "name": edit}));
+                    let _ = app.run("setup.io", json!({"action": "rename_bus", "name": name, "new_name": edit}));
                 }
                 ui.label(fmt);
                 if ui.small_button("Delete").clicked() {
-                    let _ = app.run("mix.bus_delete", json!({"bus": name}));
+                    let _ = app.run("setup.io", json!({"action": "delete_bus", "name": name}));
                 }
                 ui.end_row();
             }
@@ -426,13 +489,17 @@ pub fn io_setup(app: &mut SoundApp, ctx: &egui::Context) {
 /// Setup › Keyboard Shortcuts.
 pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_shortcuts;
+    let mac = ctx.os().is_mac();
     win(ctx, &mut open, "Keyboard Shortcuts", vec2(520.0, 480.0), |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("sc").num_columns(3).striped(true).show(ui, |ui| {
-                for c in soundcraft_engine::command_specs().iter().filter(|c| c.shortcut.is_some()) {
-                    ui.label(egui::RichText::new(c.shortcut.unwrap_or("")).font(mono(11.0)));
-                    ui.label(c.label);
-                    ui.label(egui::RichText::new(c.menu.join(" › ")).small());
+                let engine = soundcraft_engine::command_specs().iter().map(|c| (c.shortcut, c.label, c.menu.join(" › ")));
+                let windows = crate::menus::UI_COMMANDS.iter().map(|c| (c.3, c.1, c.2.replace(" > ", " › ")));
+                for (shortcut, label, menu) in engine.chain(windows) {
+                    let Some(shortcut) = shortcut else { continue };
+                    ui.label(egui::RichText::new(crate::shortcuts::shortcut_label(shortcut, mac)).font(mono(11.0)));
+                    ui.label(label);
+                    ui.label(egui::RichText::new(menu).small());
                     ui.end_row();
                 }
             });
@@ -505,4 +572,30 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
         });
     });
     app.ui.show_clip_effects = open;
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod audio_health_tests {
+    use super::*;
+
+    #[test]
+    fn window_command_renders_report_and_close_clears_snapshot() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        app.run("window.audio_health", json!({"value": true})).unwrap();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| audio_health(&mut app, ui.ctx()));
+        output.textures_delta.clear();
+        assert_eq!(app.audio_health_report.as_ref().unwrap().as_ref().unwrap()["healthy"], true);
+        assert!(!app.engine.is_dirty());
+        app.run("window.hide_floating", json!({})).unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| audio_health(&mut app, ui.ctx()));
+        output.textures_delta.clear();
+        assert!(!app.ui.show_audio_health);
+        assert!(app.audio_health_report.is_none());
+        app.run("window.audio_health", json!({"value": true})).unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| audio_health(&mut app, ui.ctx()));
+        output.textures_delta.clear();
+        assert!(app.audio_health_report.is_some());
+    }
 }

@@ -1,5 +1,6 @@
 //! Portable session archive: native metadata and every decoded audio source, without paths
 //! outside the archive. No filesystem access is used when reading or writing this format.
+use cloud_zip as zip;
 use soundcraft_audio_io::AudioBuffer;
 use soundcraft_model::{Session, SourceAudio};
 use std::{

@@ -8,6 +8,7 @@
 //!   MP4, CAF, Matroska, ADPCM/A-law/µ-law WAV, ...) through `symphonia`.
 //! * [`encode`] writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32`, and FLAC (built-in
 //!   encoder), with optional TPDF dither.
+//! * [`wav_float_header`] heads a float WAV written while it grows (recording).
 //! * [`peaks`] builds multi-resolution min/max overviews for waveform drawing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -257,6 +258,19 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     }
 }
 
+/// Formats [`encode`] can write, as the extensions that name them.
+pub const ENCODE_EXTENSIONS: &str = "wav, aif, aiff, flac";
+
+/// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`, case-insensitive), or `None` when it cannot write it.
+pub fn encode_format_for(name: &str) -> Option<FileFormat> {
+    match name.trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "wav" | "wave" | "bwf" => Some(FileFormat::Wav),
+        "aif" | "aiff" => Some(FileFormat::Aiff),
+        "flac" => Some(FileFormat::Flac),
+        _ => None,
+    }
+}
+
 /// Encode a WAV file in the RF64 layout regardless of size (normally used only above 4 GiB).
 pub fn encode_wav_rf64(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), true, None)
@@ -275,4 +289,14 @@ pub fn encode_with_channel_mask(buf: &AudioBuffer, opts: &EncodeOptions, mask: u
 /// The WAVE_FORMAT_EXTENSIBLE speaker mask of a WAV file, if it has one.
 pub fn wav_channel_mask(bytes: &[u8]) -> Option<u32> {
     wav::read_channel_mask(bytes)
+}
+
+/// The header of a 32-bit float WAV holding `frames` frames (little-endian samples follow it). Its
+/// length doesn't depend on `frames`, so a recorder can rewrite it in place as the file grows; it
+/// switches to RF64 above 4 GiB.
+pub fn wav_float_header(channels: usize, sample_rate: u32, frames: u64) -> Result<Vec<u8>> {
+    if channels == 0 || sample_rate == 0 {
+        return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
+    }
+    wav::header(channels, sample_rate, (32, true), None, None, frames, false)
 }

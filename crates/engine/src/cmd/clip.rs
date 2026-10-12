@@ -68,6 +68,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("clip.loop", "Loop...", ["Clip"], Some("Cmd+Alt+L"), "{clips?, count?: n, length?: samples}", has_selection, loop_clips),
         cmd!("clip.rename", "Rename...", ["Clip"], Some("Cmd+Alt+Shift+R"), "{clip?, name}", has_selection, rename),
         cmd!("clip.gain", "Clip Gain", [], None, "{clips?, db | delta_db}", has_selection, gain),
+        cmd!("clip.gain_nudge_up", "Nudge Clip Gain Up", [], Some("Ctrl+Shift+Up"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, 1.0)),
+        cmd!("clip.gain_nudge_down", "Nudge Clip Gain Down", [], Some("Ctrl+Shift+Down"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, -1.0)),
         cmd!("clip.gain_render", "Render", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let mut n = 0;
@@ -183,10 +185,7 @@ fn elastic(e: &mut Engine, p: &Value) -> Result<Value> {
         let elastic = s.track(t).and_then(|x| x.elastic.clone()).filter(|a| a != "varispeed");
         // Start from the unwarped original if this clip was warped before.
         let key = |k: &str| format!("elastic.{}.{k}", id.0);
-        let orig = match (s.edit.values.get(&key("src")), s.edit.values.get(&key("off")), s.edit.values.get(&key("len"))) {
-            (Some(src), Some(off), Some(len)) => Some((soundcraft_model::SourceId(*src as u64), *off as i64, *len as i64)),
-            _ => None,
-        };
+        let orig = warp_original(s, *id);
         let mut base = c.clone();
         if let Some((src, off, len)) = orig {
             base.content = soundcraft_model::ClipContent::Audio { source: src, offset: off };
@@ -227,12 +226,12 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut n = 0;
     for id in &ids {
         let key = |k: &str| format!("elastic.{}.{k}", id.0);
-        let orig = (s.edit.values.get(&key("src")).copied(), s.edit.values.get(&key("off")).copied(), s.edit.values.get(&key("len")).copied());
+        let orig = warp_original(s, *id);
         if let Some(c) = s.find_clip_mut(*id) {
             c.stretch = 1.0;
-            if let (Some(src), Some(off), Some(len)) = orig {
-                c.content = soundcraft_model::ClipContent::Audio { source: soundcraft_model::SourceId(src as u64), offset: off as i64 };
-                c.length = (len as i64).max(1);
+            if let Some((src, off, len)) = orig {
+                c.content = soundcraft_model::ClipContent::Audio { source: src, offset: off };
+                c.length = len.max(1);
                 c.fade_out.len = c.fade_out.len.min(c.length);
                 n += 1;
             }
@@ -242,6 +241,14 @@ fn remove_warp(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"restored": n}))
+}
+
+/// The audio a warped clip was rendered from, while that file is still in the session.
+fn warp_original(s: &soundcraft_model::Session, id: ClipId) -> Option<(soundcraft_model::SourceId, Samples, Samples)> {
+    let v = |k: &str| s.edit.values.get(&format!("elastic.{}.{k}", id.0)).copied();
+    let src = soundcraft_model::SourceId(v("src")? as u64);
+    s.source(src)?;
+    Some((src, v("off")? as i64, v("len")? as i64))
 }
 
 fn flag(e: &mut Engine, p: &Value, get: fn(&soundcraft_model::Clip) -> bool, set: fn(&mut soundcraft_model::Clip, bool)) -> Result<Value> {
@@ -326,6 +333,11 @@ fn gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids.len()}))
 }
 
+fn nudge_gain(e: &mut Engine, p: &Value, db: f64) -> Result<Value> {
+    let clips = clip_ids_param(e, p);
+    gain(e, &json!({"clips": clips, "delta_db": db}))
+}
+
 fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session();
@@ -364,5 +376,34 @@ mod tests {
         assert!((c.length as f64 - len0 as f64 * 0.5).abs() < 2.0);
         e.execute("clip.remove_warp", &json!({"clips": [cid]})).unwrap();
         assert_eq!(e.session().find_clip(ClipId(cid)).unwrap().1.length, len0);
+    }
+
+    #[test]
+    fn remove_warp_keeps_the_audio_when_the_original_file_is_gone() {
+        let mut e = crate::demo::demo_engine();
+        let pad = e.session().track_by_name("Pad").map(|t| t.id).unwrap();
+        e.execute("track.elastic", &json!({"track": pad, "algorithm": "polyphonic"})).unwrap();
+        let clip = e.session().track(pad).unwrap().clips()[0].clone();
+        e.execute("clip.elastic_properties", &json!({"clips": [clip.id], "ratio": 1.5})).unwrap();
+        e.execute("clip.clear", &json!({"sources": [clip.source()]})).unwrap();
+        let r = e.execute("clip.remove_warp", &json!({"clips": [clip.id]})).unwrap();
+        assert_eq!(r["restored"], 0);
+        let src = e.session().find_clip(clip.id).and_then(|(_, c)| c.source()).unwrap();
+        assert!(e.session().source(src).is_some());
+    }
+
+    #[test]
+    fn gain_nudges_one_db_at_a_time_up_to_the_ceiling() {
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        let gain = |e: &crate::Engine| e.session().find_clip(kick).unwrap().1.gain_db;
+        e.execute("edit.select", &json!({"clips": [kick.0]})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        e.execute("clip.gain_nudge_down", &json!({})).unwrap();
+        assert_eq!(gain(&e), 1.0);
+        e.execute("clip.gain", &json!({"db": 35.5})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        assert_eq!(gain(&e), 36.0);
     }
 }

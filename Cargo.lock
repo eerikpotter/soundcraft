@@ -578,6 +578,9 @@ name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "block-buffer"
@@ -760,9 +763,9 @@ dependencies = [
 
 [[package]]
 name = "candid"
-version = "0.10.37"
+version = "0.10.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4dda5edb2bfa2d7703219ba0fd6ec712343fcd03867b76b87405feaa9aae7a0"
+checksum = "88bc8f82a82e71cc997491ce7a019e503d404e6c41c45a364118173facf0fa50"
 dependencies = [
  "anyhow",
  "binrw",
@@ -783,9 +786,9 @@ dependencies = [
 
 [[package]]
 name = "candid_derive"
-version = "0.10.37"
+version = "0.10.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45e094bb111b7a9b70174aaa66f80f1a6751a2e66d2a99eef797c8ab6d0933d3"
+checksum = "228fecfdfd310928426a71a25bc359414e827f9106665120c2cccf63bc5ab499"
 dependencies = [
  "lazy_static",
  "proc-macro2",
@@ -1024,12 +1027,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
+dependencies = [
+ "egui",
+ "serde",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -2858,6 +2879,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard-types"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b750dcadc39a09dbadd74e118f6dd6598df77fa01df0cfcdc52c28dece74528a"
+dependencies = [
+ "bitflags 2.13.2",
+ "serde",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3091,6 +3123,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "muda"
+version = "0.19.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd04e60bc0b07438a6771710ee1698f98f6ebbc7f89b61264af1563b8aeb878"
+dependencies = [
+ "crossbeam-channel",
+ "dpi",
+ "keyboard-types",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "once_cell",
+ "png 0.18.1",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3162,6 +3213,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -4991,11 +5054,14 @@ dependencies = [
 
 [[package]]
 name = "soundcraft"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
  "log",
+ "muda",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
  "rfd",
  "serde_json",
  "soundcraft-engine",
@@ -5006,7 +5072,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-au-host"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "serde",
@@ -5016,7 +5082,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-audio-io"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "proptest",
@@ -5028,7 +5094,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-automation"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "serde_json",
@@ -5038,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-clap-host"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "clap-sys",
  "libloading",
@@ -5050,7 +5116,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-cli"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
  "soundcraft-audio-io",
@@ -5061,7 +5127,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-dsp"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "proptest",
@@ -5072,12 +5138,13 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-engine"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "proptest",
  "serde",
  "serde_json",
+ "soundcraft-au-host",
  "soundcraft-audio-io",
  "soundcraft-clap-host",
  "soundcraft-dsp",
@@ -5088,12 +5155,13 @@ dependencies = [
  "soundcraft-video",
  "soundcraft-vst3-host",
  "thiserror 2.0.21",
- "zip",
+ "zip 0.6.6",
+ "zip 9.0.1",
 ]
 
 [[package]]
 name = "soundcraft-midi"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5103,7 +5171,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-mix"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "rayon",
@@ -5119,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-model"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5132,7 +5200,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-playback"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "cpal",
  "log",
@@ -5145,7 +5213,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-time"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5155,8 +5223,9 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-ui-egui"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
+ "craft-ui",
  "egui",
  "egui_kittest",
  "image",
@@ -5180,7 +5249,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-video"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "image",
  "proptest",
@@ -5191,7 +5260,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-vst3-host"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "libloading",
  "log",
@@ -5206,12 +5275,16 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-web"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
+ "js-sys",
  "log",
+ "rfd",
+ "serde_json",
  "soundcraft-engine",
+ "soundcraft-model",
  "soundcraft-playback",
  "soundcraft-ui-egui",
  "sovereign-cloud-ui",
@@ -5921,6 +5994,12 @@ name = "typed-arena"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typenum"
@@ -7118,7 +7197,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
 ]
@@ -7355,6 +7434,19 @@ dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e49ade69c4434c55dd651d36fe05f38e0578db948b773cbc01c48c4b5e560692"
+dependencies = [
+ "crc32fast",
+ "indexmap",
+ "memchr",
+ "nix",
+ "typed-path",
 ]
 
 [[package]]

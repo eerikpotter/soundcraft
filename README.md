@@ -107,7 +107,8 @@ where things are.
   Scrubber tools; cut, copy, paste, duplicate, repeat, shift, insert silence, separate (at
   selection, on grid, at transients), heal, consolidate, strip silence, nudge; fades and
   crossfades in five shapes, drawn straight from the clip corners; playlists with comping lanes;
-  clip gain lines; edit groups; single-key Commands Focus shortcuts; undo for everything.
+  clip gain lines; edit groups; single-key Commands Focus shortcuts; trackpad scrolling that
+  follows your fingers and pinch-to-zoom around the pointer; undo for everything.
 - **Mixing:** fader and pan with automation, pre/post sends, busses, aux inputs, master faders,
   VCA masters, routing folders, solo modes, mute and solo groups, phase invert and trim, clip
   effects, and automatic plugin delay compensation.
@@ -116,7 +117,8 @@ where things are.
 - **Plugins:** 7-band and 1-band EQ, compressor/limiter, expander/gate, de-esser, maximizer,
   channel strip, room and plate reverbs, mod delay, chorus, flanger, phaser, saturator, lo-fi,
   rectifier, pitch shifter, time shift, gain, trim, invert, DC removal, signal generator, dither,
-  a subtractive synth and a drum synth, all original. **CLAP plugins** load too. Any processor
+  a subtractive synth, a drum synth and a sampler (plays any WAV, AIFF, FLAC, MP3 or OGG across the
+  keyboard), all original. **CLAP plugins** load too. Any processor
   runs offline as AudioSuite, and user presets save per plugin.
 - **MIDI:** instrument and MIDI tracks, a piano-roll MIDI editor with a velocity lane, an event
   list, a score view, step input, quantize, transpose, real-time properties, Standard MIDI Files,
@@ -137,7 +139,8 @@ where things are.
 ## Getting started
 
 Download a build from the [releases page](https://github.com/storytold/soundcraft/releases), or build
-from source with a recent stable Rust:
+from source with Rust 1.95 or later for the desktop/web UI (the core workspace's declared
+minimum remains Rust 1.90):
 
 ```sh
 git clone https://github.com/storytold/soundcraft
@@ -157,6 +160,28 @@ Useful shortcuts: <kbd>Space</kbd> play/stop, <kbd>⌘</kbd><kbd>=</kbd> Mix/Edi
 <kbd>F1</kbd>–<kbd>F4</kbd> edit modes, <kbd>F5</kbd>–<kbd>F10</kbd> tools, <kbd>⌘</kbd><kbd>E</kbd>
 separate, <kbd>⌘</kbd><kbd>D</kbd> duplicate, <kbd>Enter</kbd> new marker, <kbd>⌘</kbd><kbd>⇧</kbd><kbd>N</kbd>
 new tracks. **Setup › Keyboard Shortcuts** lists them all.
+
+### Logs
+
+The desktop app writes its `log` records to standard error and to `logs/soundcraft.log` in the
+settings directory, beside `ui.json`, `Autosave/` and `Presets/` (Linux `~/.config/soundcraft/logs/`,
+or `$XDG_CONFIG_HOME/soundcraft/logs/`; macOS `~/Library/Application Support/SoundCraft/logs/`;
+Windows `%APPDATA%\SoundCraft\logs\`). A start from a desktop menu or the Dock has no terminal, so
+this file is what to attach to a bug report: the engine's panic report, audio devices that failed to
+open or broke, plugins that refused their stored state, CLAP plugins' own messages and files that
+failed to open land there. Each launch moves the previous log to `soundcraft.1.log` (and that one to
+`soundcraft.2.log`), so the log of a run that crashed survives the next start. The file stops
+growing at 16 MiB. `--version` writes no file, and runs with `SOUNDCRAFT_NO_PREFS` log to standard
+error only.
+
+| Variable | Effect |
+|---|---|
+| `RUST_LOG` | Log levels for standard error and the log file. Default: `info` for SoundCraft's own crates, `warn` for everything else. env_logger-style directives replace that, e.g. `RUST_LOG=debug`, `RUST_LOG=warn,soundcraft_mix=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`soundcraft*=debug`). |
+| `SOUNDCRAFT_NO_PREFS` | No preferences read or written and no log file (agents' test runs). |
+
+The realtime audio thread never writes a record itself: the logger keeps the first one it logs
+(without waiting or allocating), counts the rest, and the UI thread writes them. The logger is
+`apps/soundcraft/src/logging.rs`. The web app logs to the browser console instead.
 
 ## For agents and scripts
 
@@ -184,6 +209,12 @@ claude mcp add soundcraft -- soundcraft-cli mcp --demo
 See [`docs/control-protocol.md`](docs/control-protocol.md) and [`docs/mcp.md`](docs/mcp.md).
 `soundcraft-cli commands` lists every command.
 
+Open **SoundCraft › Session Audio Health** to check loaded audio availability, sample-rate
+mismatches and clip source bounds across all playlists, including alternate takes. The report
+offers a refresh button and suggests how to resolve each issue. Scripts can obtain the same JSON
+report with `soundcraft-cli run --demo --cmd 'session.audio_health={}'`. This checks loaded media,
+not files on disk, signal levels, plugins or routing.
+
 ## How it's built
 
 SoundCraft is a Cargo workspace of small crates with strict layering: nothing below the UI knows
@@ -208,10 +239,15 @@ and layering checks and the WebAssembly build.
 
 ## Status and roadmap
 
-SoundCraft is **pre-alpha, and close to its first alpha**: it covers 94 % of the incumbent's menu
-items and roughly two thirds of its features in depth. The core works and is fun to use, and plenty is still missing. The
-honest status, what's next and our effort estimates are in [`ROADMAP.md`](ROADMAP.md); the
-menu-by-menu comparison is in [`docs/parity.md`](docs/parity.md). Bug reports and wish lists are
+SoundCraft is **pre-alpha**: it covers 94 % of the incumbent's menu items (measured), about 70 % of
+its features by presence, and is roughly 40 % of the way to replacing it for real work: record,
+edit, mix and bounce work end to end, but choosing an audio interface and buffer size,
+recording MIDI from a controller and session interchange (AAF/OMF) are still missing, and those
+are the alpha checklist. Translations are missing too. The status, the stage and our effort
+estimates are in [`ROADMAP.md`](ROADMAP.md); the full assessment is in
+[`docs/target-app-parity.md`](docs/target-app-parity.md), the ranked list of what's missing in
+[`docs/gaps.md`](docs/gaps.md), and the menu-by-menu comparison in
+[`docs/parity-checklist.md`](docs/parity-checklist.md). Bug reports and wish lists are
 very welcome, in the issues or on Discord.
 
 ## Downloads
@@ -227,6 +263,25 @@ very welcome, in the issues or on Discord.
 | x86 (32-bit) | `soundcraft-<ver>-windows-x86.msi` | `soundcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+**If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
+Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
+`atio6axx.dll`) before the window appears, so the app would flash in Task Manager and quit.
+`WGPU_BACKEND` overrides the default for troubleshooting (for example `dx12` or `vulkan`). In
+PowerShell, from the folder containing the executable:
+
+```powershell
+$env:WGPU_BACKEND = "vulkan"
+& .\soundcraft.exe
+Remove-Item Env:WGPU_BACKEND                     # restore the default for later launches
+```
+
+An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
+and web backend defaults are unchanged.
+
+DirectX 12 shaders are compiled with FXC, which is part of Windows, so no `dxcompiler.dll` or
+`dxil.dll` is needed ("Parent device is lost" at start, #185). `$env:WGPU_DX12_COMPILER = "dxc"`
+(or `"auto"`) selects wgpu's DXC handling again for troubleshooting.
 
 ### macOS
 
@@ -244,6 +299,8 @@ Installers and executables are code-signed.
 | Debian/Ubuntu | `soundcraft-<ver>-linux-x86_64.deb` | `soundcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `soundcraft-<ver>-linux-x86_64.rpm` | `soundcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `soundcraft-<ver>-linux-x86_64.tar.gz` | `soundcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+
+RISC-V (riscv64): `soundcraft-<ver>-linux-riscv64.tar.gz`, a tarball only (glibc 2.39+, e.g. Ubuntu 24.04).
 
 ### FreeBSD
 
@@ -323,3 +380,5 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+Tracks and Groups, Clips, MIDI Editor, Memory Locations, and Undo History use movable panels. Edit and Mix retain separate arrangements; Clips and MIDI Editor belong to Edit. Transport, plug-in, and specialist utility windows retain their existing hosts. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.

@@ -52,15 +52,16 @@ pub fn run(app: &mut SoundApp, id: &str, p: &Value) -> Option<Value> {
 }
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
-    apply_customization(app, ctx);
     auto_update(app, ctx);
     renderer(app, ctx);
     ui_customization(app, ctx);
+    apply_customization(app, ctx);
 }
 
 fn apply_customization(app: &mut SoundApp, ctx: &egui::Context) {
     let want = (app.extra.ui_scale.clamp(0.75, 1.5), app.extra.reduce_motion);
-    if app.extra.applied == Some(want) {
+    // Rescaling mid-drag would move the Interface scale slider out from under the pointer.
+    if app.extra.applied == Some(want) || ctx.input(|i| i.pointer.any_down()) {
         return;
     }
     // Only touch the zoom once the user has changed it, so platform scaling stays untouched.
@@ -87,7 +88,7 @@ fn renderer(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         return;
     }
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let fmt = app.engine.session().main_format();
     let peaks: Vec<f32> = app.player.as_ref().map(|p| p.meters().main.peaks).unwrap_or_default();
     let objects: Vec<(String, f32, f32, f32)> = app
@@ -149,17 +150,28 @@ fn ui_customization(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         return;
     }
-    egui::Window::new(egui::RichText::new("UI Customization").font(bold(13.0)))
-        .open(&mut open)
-        .default_size(vec2(320.0, 180.0))
-        .resizable(false)
-        .show(ctx, |ui| {
+    egui::Window::new(egui::RichText::new("Appearance").font(bold(13.0))).open(&mut open).default_size(vec2(320.0, 180.0)).resizable(false).show(
+        ctx,
+        |ui| {
             egui::Grid::new("ui_custom").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
                 ui.label("Interface scale");
                 ui.add(egui::Slider::new(&mut app.extra.ui_scale, 0.75..=1.5).step_by(0.05).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
                 ui.end_row();
                 ui.label("Reduce motion");
                 ui.checkbox(&mut app.extra.reduce_motion, "");
+                ui.end_row();
+                ui.label("Theme");
+                let mut chosen = None;
+                egui::ComboBox::from_id_salt("theme_mode").selected_text(app.ui.theme.label()).show_ui(ui, |ui| {
+                    for mode in crate::theme::ThemeMode::ALL {
+                        if ui.selectable_label(app.ui.theme == mode, mode.label()).clicked() {
+                            chosen = Some(mode);
+                        }
+                    }
+                });
+                if let Some(mode) = chosen {
+                    let _ = app.run("ui.theme", json!({"mode": mode.id()}));
+                }
                 ui.end_row();
                 ui.label("Auto-update configuration");
                 ui.checkbox(&mut app.extra.auto_update_config, "");
@@ -168,7 +180,9 @@ fn ui_customization(app: &mut SoundApp, ctx: &egui::Context) {
             if ui.button("Reset").clicked() {
                 app.extra.ui_scale = 1.0;
                 app.extra.reduce_motion = false;
+                let _ = app.run("ui.theme", json!({"mode": crate::theme::ThemeMode::default().id()}));
             }
-        });
+        },
+    );
     app.extra.show_ui_customization = open;
 }
