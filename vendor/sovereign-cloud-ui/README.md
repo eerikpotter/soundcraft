@@ -1,6 +1,6 @@
 # Shared Craft cloud UI
 
-The canonical cloud dialogs and browser controller for all five Craft editors.
+The canonical cloud dialogs and browser controller for all registered Craft editors.
 Authentication, transfer integrity, retries, account scoping and file formats are
 provided by `sovereign-cloud`; each web host implements `Editor` for its documents.
 `scripts/sync-sdk.py` vendors both packages into each independent app checkout.
