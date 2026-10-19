@@ -42,7 +42,7 @@ fn info_exposes_visible_params_with_plain_ranges() {
     assert_eq!(info.id, gain);
     assert_eq!(info.short_name, "Fixture ");
     let ids: Vec<&str> = info.params.iter().map(|p| p.id).collect();
-    assert_eq!(ids, vec!["7", "3", "12"], "hidden 9 and bypass 11 are skipped");
+    assert_eq!(ids, vec!["7", "3", "12", "13", "14"], "hidden 9 and bypass 11 are skipped");
     let g = info.param("7").unwrap();
     assert_eq!((g.name, g.min, g.max, g.default, g.unit, g.taper), ("Gain", 0.0, 2.0, 1.0, Unit::Db, Taper::Linear));
     let mode = info.param("3").unwrap();
@@ -53,6 +53,23 @@ fn info_exposes_visible_params_with_plain_ranges() {
     assert!((f.min - 20.0).abs() < 1e-3 && (f.max - 20_000.0).abs() < 1e-1, "{f:?}");
     // Cached: the same leaked info every time.
     assert!(std::ptr::eq(info, soundcraft_vst3_host::plugin_info(&gain).unwrap()));
+}
+
+/// #599: a plugin whose `normalizedParamToPlain` is the identity (JUCE, the SDK's default
+/// `Parameter`) gives SoundCraft a 0..1 range; its real values are only in its own text, which the
+/// editor handle reads from the controller on the main thread only (see `editor_main_thread`).
+#[test]
+fn identity_mapped_param_text_is_read_on_the_main_thread_only() {
+    let id = id_of("Fixture Gain");
+    let level = soundcraft_vst3_host::plugin_info(&id).unwrap().param("13").unwrap();
+    assert_eq!((level.min, level.max, level.unit), (0.0, 1.0, Unit::Db));
+    let mut p = soundcraft_vst3_host::instantiate_plugin(&id).unwrap();
+    let mut ed = soundcraft_dsp::Plugin::editor(&mut p).expect("editor handle");
+    if cfg!(any(target_os = "macos", windows)) {
+        assert_eq!(ed.value_text("13", 0.375), None, "test threads are not the main thread");
+    } else {
+        assert_eq!(ed.value_text("13", 0.375).as_deref(), Some("\u{2212}6.0 dB"));
+    }
 }
 
 #[test]
@@ -121,6 +138,16 @@ fn synth_plays_notes_at_their_offsets() {
     p.all_notes_off();
     p.process(&mut io, 64);
     assert!(io[0].iter().all(|x| x.abs() < 1e-6));
+    // MIDI CC 7 reaches the parameter the plugin maps it to, and poly pressure arrives as an event,
+    // each at its offset; an unmapped controller is dropped.
+    p.midi(10, [0xA0, 60, 32]);
+    p.midi(20, [0xB0, 7, 64]);
+    p.midi(30, [0xB0, 1, 127]);
+    p.process(&mut io, 64);
+    assert!(io[0][9].abs() < 1e-6 && (io[0][10] - 32.0 / 127.0).abs() < 1e-6);
+    assert!((io[0][20] - 64.0 / 127.0).abs() < 1e-6 && (io[0][63] - 64.0 / 127.0).abs() < 1e-6);
+    p.midi(0, [0xB0, 7, 0]);
+    p.process(&mut io, 64);
     // Notes in a later sub-block of a chunked call land at the right frame.
     p.prepare(48_000.0, 32, 2);
     let mut io = vec![vec![0.0f32; 96], vec![0.0f32; 96]];
@@ -209,11 +236,65 @@ fn state_saves_component_and_controller_and_restores_them() {
 }
 
 #[test]
+fn state_reader_reads_while_another_thread_processes() {
+    let id = id_of("Fixture Gain");
+    let mut p = soundcraft_vst3_host::create(&id).unwrap();
+    p.prepare(48_000.0, 64, 2);
+    assert!(p.set_param("7", 1.5));
+    p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+    let mut reader = p.state_reader().expect("every VST3 component has a state");
+    let blob = p.save_state().unwrap();
+    let audio = std::thread::spawn(move || {
+        for _ in 0..2_000 {
+            p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+        }
+        p
+    });
+    while !audio.is_finished() {
+        assert_eq!(reader.save_state().as_ref(), Some(&blob));
+    }
+    let p = audio.join().unwrap();
+    assert_eq!(reader.save_state(), Some(blob));
+    drop(p);
+    assert_eq!(reader.save_state(), None);
+}
+
+#[test]
+fn host_set_controller_param_survives_state_round_trip() {
+    // Freq lives only in the controller (the processor ignores it), so processing never carries
+    // the host's value there: the state save has to.
+    let id = id_of("Fixture Gain");
+    let mut p = soundcraft_vst3_host::create(&id).unwrap();
+    p.prepare(48_000.0, 64, 2);
+    assert!(p.set_param("7", 1.5));
+    assert!(p.set_param("12", 200.0));
+    let mut p = std::thread::spawn(move || {
+        let mut io = vec![vec![0.5f32; 64]; 2];
+        p.process(&mut io, 64);
+        assert!(io.iter().flatten().all(|&x| (x - 0.75).abs() < 1e-4));
+        p
+    })
+    .join()
+    .unwrap();
+    assert!((p.param("12").unwrap() - 200.0).abs() < 0.01);
+    let blob = p.save_state().expect("state");
+    let mut q = soundcraft_vst3_host::create(&id).unwrap();
+    assert!(q.load_state(&blob));
+    assert!((q.param("7").unwrap() - 1.5).abs() < 1e-4, "{:?}", q.param("7"));
+    assert!((q.param("12").unwrap() - 200.0).abs() < 0.01, "{:?}", q.param("12"));
+    assert!(q.set_param("12", 300.0));
+    assert!(q.load_state(&blob));
+    let mut r = soundcraft_vst3_host::create(&id).unwrap();
+    assert!(r.load_state(&q.save_state().unwrap()));
+    assert!((r.param("12").unwrap() - 200.0).abs() < 0.01, "a loaded state replaces earlier edits: {:?}", r.param("12"));
+}
+
+#[test]
 fn editor_view_is_probed_and_edits_come_back_as_plain_values() {
     let id = id_of("Fixture Gain");
     let mut p = soundcraft_vst3_host::instantiate_plugin(&id).unwrap();
-    // Editor windows are hosted on macOS only; elsewhere the probe reports "unsupported".
-    if cfg!(target_os = "macos") {
+    // Editor windows are hosted on macOS and Windows; elsewhere the probe reports "unsupported".
+    if cfg!(any(target_os = "macos", windows)) {
         assert_eq!(p.editor_size(), Ok((320, 240)));
     } else {
         assert!(p.editor_size().is_err());
@@ -222,7 +303,7 @@ fn editor_view_is_probed_and_edits_come_back_as_plain_values() {
     // The fixture "edits" Gain to 0.9 (normalized) when it gets the component handler.
     assert_eq!(ed.idle(), vec![("7".to_string(), 1.8)]);
     assert!(ed.idle().is_empty());
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", windows)) {
         assert!(ed.open().unwrap_err().contains("main thread"), "test threads are not the main thread");
     } else {
         assert!(ed.open().is_err(), "unsupported elsewhere");

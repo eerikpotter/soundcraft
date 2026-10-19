@@ -13,7 +13,7 @@ const SYNTH: &str = "clap:org.soundcraft.test.synth";
 fn scan_lists_both_fixture_plugins() {
     let dir = fixture_dir();
     let found = soundcraft_clap_host::scan_paths(&[dir.to_path_buf()]);
-    assert_eq!(found.len(), 2);
+    assert_eq!(found.len(), 5);
     let g = found.iter().find(|d| d.id == GAIN).unwrap();
     assert_eq!(g.name, "Fixture Gain");
     assert_eq!(g.vendor, "SoundCraft tests");
@@ -105,6 +105,30 @@ fn synth_plays_notes_at_their_offsets() {
     p.all_notes_off();
     p.process(&mut io, 64);
     assert!(io[0].iter().all(|x| x.abs() < 1e-6));
+    p.midi(20, [0xB0, 7, 64]);
+    p.process(&mut io, 64);
+    assert!(io[0][19].abs() < 1e-6 && (io[0][20] - 64.0 / 127.0).abs() < 1e-6, "controllers arrive as MIDI at their offset");
+}
+
+#[test]
+fn layouts_beyond_the_host_limits_are_rejected_not_truncated() {
+    fixture_dir();
+    // Control: exactly at the limits (16 ports of 64 channels) activates and gets its full layout.
+    let mut p = soundcraft_clap_host::create("clap:org.soundcraft.test.wide16").unwrap();
+    p.prepare(44_100.0, 64, 2);
+    assert_eq!(p.latency(), 3);
+    let mut io = vec![vec![0.5f32; 64]; 2];
+    p.process(&mut io, 64);
+    assert!(io.iter().flatten().all(|&x| x == 1.0), "16x64 layout delivered as advertised: {:?}", &io[0][..4]);
+    // 17 ports, or a 65-channel port: never activated, never processed with a cut-down layout.
+    for id in ["clap:org.soundcraft.test.wide17ports", "clap:org.soundcraft.test.wide65ch"] {
+        let mut p = soundcraft_clap_host::create(id).unwrap();
+        p.prepare(44_100.0, 64, 2);
+        assert_eq!(p.latency(), 0, "{id}: not activated");
+        let mut io = vec![vec![0.5f32; 64]; 2];
+        p.process(&mut io, 64);
+        assert!(io.iter().flatten().all(|&x| x == 0.5), "{id}: the plugin never ran: {:?}", &io[0][..4]);
+    }
 }
 
 #[test]
@@ -146,9 +170,34 @@ fn state_saves_and_restores_into_a_new_instance() {
     // Plugins without clap.state.
     let mut s = soundcraft_clap_host::create(SYNTH).unwrap();
     assert!(s.save_state().is_none());
+    assert!(s.state_reader().is_none());
     assert!(!s.load_state(&blob));
     assert!(s.editor().is_none(), "the synth has no GUI");
     assert!(s.open_editor().is_err());
+}
+
+#[test]
+fn state_reader_reads_while_another_thread_processes() {
+    fixture_dir();
+    let mut p = soundcraft_clap_host::create(GAIN).unwrap();
+    p.prepare(48_000.0, 64, 2);
+    assert!(p.set_param("7", 1.5));
+    p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+    let mut reader = p.state_reader().expect("the gain fixture has clap.state");
+    let blob = p.save_state().unwrap();
+    let audio = std::thread::spawn(move || {
+        for _ in 0..2_000 {
+            p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+        }
+        p
+    });
+    while !audio.is_finished() {
+        assert_eq!(reader.save_state().as_ref(), Some(&blob));
+    }
+    let p = audio.join().unwrap();
+    assert_eq!(reader.save_state(), Some(blob));
+    drop(p);
+    assert_eq!(reader.save_state(), None);
 }
 
 #[test]

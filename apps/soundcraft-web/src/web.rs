@@ -1,8 +1,8 @@
 //! The browser shell: the eframe web runner around [`SoundApp`].
 
-use serde_json::json;
 use soundcraft_engine::{Engine, io};
 use soundcraft_ui_egui::dialogs::Dialog;
+use soundcraft_ui_egui::sampler_window::SampleRead;
 use soundcraft_ui_egui::{Services, SoundApp};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -52,6 +52,7 @@ pub fn start() {
                     Ok(Box::new(WebShell {
                         app,
                         inbox: Rc::default(),
+                        samples: Rc::default(),
                         #[cfg(feature = "icp-cloud")]
                         cloud,
                     }))
@@ -80,7 +81,8 @@ enum Purpose {
 }
 
 const SESSION_EXTS: &[&str] = &[io::BUNDLE_EXTENSION, soundcraft_model::SESSION_EXTENSION];
-const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf", "mkv", "webm"];
+const AUDIO_EXTS: &[&str] =
+    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"];
 const MIDI_EXTS: &[&str] = &["mid", "midi", "smf"];
 
 impl Purpose {
@@ -119,11 +121,16 @@ impl Purpose {
 /// handled on the next frame. The browser has no paths: files travel as bytes.
 type Inbox = Rc<RefCell<Vec<(Purpose, String, Vec<u8>)>>>;
 
+/// Audio dropped on an instrument track or a Sampler window, its bytes read, waiting for the
+/// next frame to load into that track's sampler.
+type SampleInbox = Rc<RefCell<Vec<(SampleRead, Result<Vec<u8>, String>)>>>;
+
 struct WebShell {
     #[cfg(feature = "icp-cloud")]
     cloud: sovereign_cloud_ui::Cloud,
     app: SoundApp,
     inbox: Inbox,
+    samples: SampleInbox,
 }
 
 impl WebShell {
@@ -148,7 +155,17 @@ impl WebShell {
 
     fn take_drops(&mut self, ctx: &egui::Context) {
         // In the browser a dropped file's `path()` is only its name: read its bytes instead.
-        let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+        // Audio dropped on an instrument track or a Sampler window goes to its sampler instead.
+        let dropped = self.app.take_dropped_files(ctx);
+        ctx.input_mut(|i| i.raw.dropped_files.clear());
+        for read in self.app.take_sample_reads() {
+            let (samples, ctx) = (self.samples.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let bytes = read.file.bytes_async().await;
+                samples.borrow_mut().push((read, bytes));
+                ctx.request_repaint();
+            });
+        }
         for f in dropped {
             let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio.wav".into());
             let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
@@ -164,27 +181,23 @@ impl WebShell {
         }
     }
 
-    fn handle(&mut self, purpose: Purpose, name: &str, bytes: &[u8]) {
+    fn handle(&mut self, purpose: Purpose, name: String, bytes: Vec<u8>) {
         let e = &mut self.app.engine;
         let at = e.session().edit.selection.start.max(0);
         let result = match purpose {
-            Purpose::Session => {
-                let _ = self.app.run("transport.stop", json!({}));
-                io::open_session_bytes(&mut self.app.engine, name, bytes).map(|missing| {
-                    if missing.is_empty() { format!("Opened {name}") } else { format!("Opened {name} ({} missing media)", missing.len()) }
-                })
-            }
+            // Asks first when the open session has changes: the bytes wait for the answer.
+            Purpose::Session => return soundcraft_ui_egui::dialogs::open_session_bytes(&mut self.app, name, bytes),
             // Imports are edits: one undo step each, like the import commands.
             Purpose::Audio => {
                 let before = e.session_arc();
-                io::import_audio_bytes(e, name, bytes, None, None, at).map(|_| {
+                io::import_audio_bytes(e, &name, &bytes, None, None, at).map(|_| {
                     e.push_undo("Import Audio", before);
                     format!("Imported {name}")
                 })
             }
             Purpose::Midi => {
                 let before = e.session_arc();
-                io::import_midi_bytes(e, bytes, at, true).map(|_| {
+                io::import_midi_bytes(e, &bytes, at, true).map(|_| {
                     e.push_undo("Import MIDI", before);
                     format!("Imported {name}")
                 })
@@ -200,7 +213,11 @@ impl eframe::App for WebShell {
         self.take_path_prompt(ctx);
         let pending = std::mem::take(&mut *self.inbox.borrow_mut());
         for (purpose, name, bytes) in pending {
-            self.handle(purpose, &name, &bytes);
+            self.handle(purpose, name, bytes);
+        }
+        let samples = std::mem::take(&mut *self.samples.borrow_mut());
+        for (read, bytes) in samples {
+            self.app.load_sample_bytes(&read, bytes);
         }
         self.app.logic(ctx);
         publish_dirty_state(self.app.engine.is_dirty() || self.app.engine.transport.recording);

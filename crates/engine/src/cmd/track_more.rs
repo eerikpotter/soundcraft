@@ -153,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "track.designate_target_playlist",
             "Designate as Target Playlist",
             ["Track"],
-            None,
+            Some("Cmd+Shift+Right"),
             "{tracks?, index?} — the active playlist (or `index`) becomes the target for Copy/Move Selection to",
             has_selection,
             designate_target
@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "track.show_target_playlist",
             "Show Target Playlist",
             ["Track"],
-            None,
+            Some("Shift+Right"),
             "{tracks?} — makes the target playlist the main playlist",
             has_selection,
             show_target
@@ -271,7 +271,7 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "track.load_preset";
     let path = str_param(p, "path").ok_or_else(|| bad(id, "`path` required"))?.to_string();
     let tracks = tracks_required(e, id, p)?;
-    let text = std::fs::read_to_string(&path).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
+    let text = crate::io::read_text(&path)?;
     let v: Value = serde_json::from_str(&text).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     if v.get("format").and_then(Value::as_str) != Some(PRESET_FORMAT) {
         return Err(EngineError::Io(format!("{path}: not a SoundCraft track preset")));
@@ -383,6 +383,10 @@ fn write_rtp(e: &mut Engine, p: &Value) -> Result<Value> {
                 n.start = n.start.saturating_add(r.delay_ticks).max(0);
                 notes += 1;
             }
+            // Playback delays controller events too, but ignores those before tick 0 (hidden by a start trim).
+            for c in sequence.ctrls.iter_mut().filter(|c| c.tick >= 0) {
+                c.tick = c.tick.saturating_add(r.delay_ticks).max(0);
+            }
             sequence.sort();
         }
         let pre = format!("rtp.{}.", t.0);
@@ -443,6 +447,21 @@ fn coalesce_trim(e: &mut Engine, p: &Value) -> Result<Value> {
             n += 1;
         }
         tr.automation.retain(|l| l.param != trim_param());
+    }
+    Ok(json!({"tracks": n}))
+}
+
+pub(super) fn clear_trim(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "track.clear_trim_automation", p)?;
+    let s = e.session_mut();
+    let mut n = 0;
+    for t in &tracks {
+        let Some(tr) = s.track_mut(*t) else { continue };
+        let before = tr.automation.len();
+        tr.automation.retain(|l| l.param != trim_param());
+        if tr.automation.len() < before {
+            n += 1;
+        }
     }
     Ok(json!({"tracks": n}))
 }
@@ -621,6 +640,31 @@ mod tests {
     }
 
     #[test]
+    fn rtp_delay_shifts_controller_events() {
+        use soundcraft_midi::{CtrlEvent, CtrlKind};
+        let mut e = crate::demo::demo_engine();
+        let keys = e.session().track_by_name("Keys").unwrap().id;
+        let s = e.session_mut();
+        if let Some(pl) = s.track_mut(keys).and_then(Track::playlist_mut)
+            && let ClipContent::Midi { sequence } = &mut pl.clips[0].content
+        {
+            sequence.ctrls.clear();
+            sequence.ctrls.push(CtrlEvent { tick: 100, channel: 0, kind: CtrlKind::Cc(7), value: 90 });
+            sequence.ctrls.push(CtrlEvent { tick: 200, channel: 0, kind: CtrlKind::PitchBend, value: 10 });
+            sequence.ctrls.push(CtrlEvent { tick: -30, channel: 0, kind: CtrlKind::Cc(1), value: 5 });
+        }
+        s.edit.values.insert(track_key("rtp", keys, "delay"), 50.0);
+        e.execute("edit.select", &json!({"tracks": [keys.0]})).unwrap();
+        e.execute("track.write_midi_rtp", &json!({})).unwrap();
+        let ClipContent::Midi { sequence } = &e.session().track(keys).unwrap().clips()[0].content else { panic!() };
+        let tick_of = |k: CtrlKind| sequence.ctrls.iter().find(|c| c.kind == k).map(|c| c.tick);
+        assert_eq!(tick_of(CtrlKind::Cc(7)), Some(150), "playback delayed the CC by 50 ticks; baked result must match");
+        assert_eq!(tick_of(CtrlKind::PitchBend), Some(250));
+        // Hidden by a start trim: playback ignores it, so baking leaves it alone.
+        assert_eq!(tick_of(CtrlKind::Cc(1)), Some(-30));
+    }
+
+    #[test]
     fn trim_and_vca_coalesce() {
         let mut e = Engine::default();
         e.execute("track.new", &json!({"count": 2})).unwrap();
@@ -647,6 +691,26 @@ mod tests {
         let tr = e.session().track(a).unwrap();
         assert!((tr.lane(&AutoParam::Volume).unwrap().value_at(2500, 0.0) + 10.0).abs() < 1e-4);
         assert!(tr.lane(&trim_param()).is_none());
+    }
+
+    #[test]
+    fn clear_trim_automation_removes_only_trim() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 2})).unwrap();
+        let ids: Vec<TrackId> = e.session().tracks.iter().map(|t| t.id).collect();
+        let (a, b) = (ids[0], ids[1]);
+        e.execute("automation.set_point", &json!({"track": a.0, "param": "volume", "at": 0, "value": -3.0})).unwrap();
+        e.execute("track.trim_automation_write", &json!({"tracks": [a.0, b.0], "start": 0, "end": 4800, "db": -12.0})).unwrap();
+        let has_trim = |e: &Engine, t: TrackId| e.session().track(t).unwrap().lane(&trim_param()).is_some_and(|l| !l.points.is_empty());
+        e.execute("edit.select", &json!({"tracks": [a.0]})).unwrap();
+        e.execute("track.clear_trim_automation", &json!({})).unwrap();
+        assert!(!has_trim(&e, a), "the selected track loses its trim");
+        assert!(has_trim(&e, b), "other tracks keep theirs");
+        assert_eq!(e.session().track(a).unwrap().lane(&AutoParam::Volume).unwrap().points.len(), 1);
+        e.execute("track.clear_trim_automation", &json!({"tracks": [b.0]})).unwrap();
+        assert!(!has_trim(&e, b), "an explicit track is cleared too");
+        assert!(e.undo());
+        assert!(has_trim(&e, b), "undo brings the trim back");
     }
 
     #[test]

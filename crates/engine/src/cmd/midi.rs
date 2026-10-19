@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "midi.new_clip",
             "New MIDI Clip",
-            [],
+            ["Clip"],
             None,
             "{track, start?, end?|length?} (default: the edit selection, or 1 bar)",
             has_tracks,
@@ -24,10 +24,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("midi.note_delete", "Delete Notes", [], None, "{clip, indices: [n]}", always, note_delete),
         cmd!("midi.notes_move", "Move Notes", [], None, "{clip, indices: [n], ticks?: 0, semitones?: 0}", always, notes_move),
     ]
-}
-
-fn clip_id(p: &Value, cmd: &str) -> Result<ClipId> {
-    p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(cmd, "`clip` id required"))
 }
 
 fn seq_mut<'a>(e: &'a mut Engine, id: ClipId, cmd: &str) -> Result<&'a mut Sequence> {
@@ -130,8 +126,8 @@ fn notes_move(e: &mut Engine, p: &Value) -> Result<Value> {
     let seq = seq_mut(e, id, "midi.notes_move")?;
     for (i, n) in seq.notes.iter_mut().enumerate() {
         if idx.contains(&i) {
-            n.start = (n.start + dt).max(0);
-            n.pitch = (i64::from(n.pitch) + ds).clamp(0, 127) as u8;
+            n.start = n.start.saturating_add(dt).max(0);
+            n.pitch = i64::from(n.pitch).saturating_add(ds).clamp(0, 127) as u8;
         }
     }
     seq.sort();
@@ -159,6 +155,21 @@ mod tests {
         e.execute("midi.note_delete", &json!({"clip": clip, "indices": [0]})).unwrap();
         assert_eq!(e.execute("midi.notes", &json!({"clip": clip})).unwrap()["notes"].as_array().map(Vec::len), Some(1));
         assert!(e.execute("midi.note_edit", &json!({"clip": clip, "index": 99})).is_err());
+    }
+
+    #[test]
+    fn notes_move_huge_params_do_not_overflow() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let r = e.execute("midi.new_clip", &json!({"track": t.0})).unwrap();
+        let clip = r["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 480})).unwrap();
+        e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "ticks": i64::MAX})).unwrap();
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        assert_eq!(n["notes"][0]["start"], i64::MAX);
+        e.execute("midi.notes_move", &json!({"clip": clip, "indices": [0], "semitones": i64::MAX})).unwrap();
+        let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        assert_eq!(n["notes"][0]["pitch"], 127);
     }
 
     #[test]
