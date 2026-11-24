@@ -2,15 +2,18 @@
 //! operations (split notes, input quantize, step input, restore/flatten performance), MIDI track
 //! offsets and real-time properties, chord extraction, Beat Detective, Identify Beat and
 //! Retrospective Record.
+use super::{
+    CommandSpec, always, bad, bool_or, clip_ids_param, f32_or, f64_or, has_range, has_selection, has_tracks, i64_or, position_param, range_param,
+    str_param, track_param, tracks_param, tracks_required,
+};
 
 use super::more_util::{store_value, track_key, values_with_prefix};
-use super::*;
-use crate::cmd;
-use serde_json::json;
+use crate::{Engine, Result, cmd};
+use serde_json::{Value, json};
 use soundcraft_midi::Note;
 use soundcraft_midi::ops::QuantizeOptions;
 use soundcraft_model::{ChannelFormat, Clip, ClipContent, ClipId, MarkerKind, Session, TrackId, TrackKind};
-use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER, TempoMap};
+use soundcraft_time::{MAX_POSITION, Range, Samples, TICKS_PER_QUARTER, TempoMap};
 
 /// Most tempo events one curve may write.
 const MAX_TEMPO_EVENTS: i64 = 10_000;
@@ -125,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "event.beat_detective",
-            "Beat Detective",
+            "Beat Analysis",
             ["Event"],
             None,
             "{tracks?, start?, end?, sensitivity?: 0.5, separate?: false, set_tempo?: false}",
@@ -271,7 +274,12 @@ fn tempo_curve(e: &mut Engine, p: &Value, curve: Curve, id: &str) -> Result<Valu
 
 fn tempo_stretch(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.tempo_stretch";
-    let (r, t0, t1) = selection_ticks(e, p, id)?;
+    // Here `length` is the new length of the selection, not part of the range.
+    let mut range_params = p.clone();
+    if let Some(m) = range_params.as_object_mut() {
+        m.remove("length");
+    }
+    let (r, t0, t1) = selection_ticks(e, &range_params, id)?;
     let factor = match position_param(e, id, p, "length")? {
         Some(l) if l > 0 => l as f64 / r.len() as f64,
         _ => f64_or(p, "factor", f64::NAN),
@@ -341,7 +349,10 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         };
         let mut nc = c.clone();
         nc.id = s.new_clip_id();
-        nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new() } };
+        // Note-split has always copied only the matching notes, not controllers. SysEx is the same
+        // default now that Sequence has that field: packets stay on the source clip. Full SysEx
+        // split/trim/heal is storytold/soundcraft#1618.
+        nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new(), sysex: Vec::new() } };
         crate::edit::place_clip(s, nt, nc);
     }
     Ok(json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()}))
@@ -561,18 +572,11 @@ pub fn chord_name(weights: &[f64; 12], bass: usize) -> Option<String> {
 const MAX_CHORD_BARS: usize = 100_000;
 const MAX_CHORD_NOTES: usize = 10_000_000;
 
-fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
-    let id = "event.extract_chords";
-    let (_, t0, t1) = selection_ticks(e, p, id)?;
-    let s = e.session();
-    let picked = tracks_param(e, id, p)?;
-    let mut tracks: Vec<TrackId> = picked.into_iter().filter(|t| s.track(*t).is_some_and(|x| x.kind.is_midi())).collect();
-    if tracks.is_empty() {
-        tracks = s.tracks.iter().filter(|t| t.kind.is_midi()).map(|t| t.id).collect();
-    }
-    // Absolute (tick) notes from every MIDI clip on those tracks, cut to their clip.
+/// Absolute `(start, end, pitch)` tick notes from every MIDI clip on `tracks`, cut to their clip
+/// and sorted by start.
+fn midi_tick_notes(s: &Session, tracks: &[TrackId]) -> Vec<(i64, i64, u8)> {
     let mut notes: Vec<(i64, i64, u8)> = Vec::new();
-    for t in &tracks {
+    for t in tracks {
         for c in s.track(*t).map(|tr| tr.clips()).unwrap_or(&[]) {
             let ClipContent::Midi { sequence } = &c.content else { continue };
             let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
@@ -587,6 +591,36 @@ fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     notes.sort_unstable_by_key(|n| n.0);
+    notes
+}
+
+/// Duration-weighted pitch classes of the notes sounding in `a..b`, and the lowest pitch among them.
+fn pitch_class_weights(sounding: &[(i64, i64, u8)], a: i64, b: i64) -> ([f64; 12], Option<u8>) {
+    let mut w = [0.0f64; 12];
+    let mut bass: Option<u8> = None;
+    for (na, nb, pitch) in sounding {
+        let ov = (*nb).min(b) - (*na).max(a);
+        if ov > 0 {
+            if let Some(x) = w.get_mut(usize::from(*pitch) % 12) {
+                *x += ov as f64;
+            }
+            bass = Some(bass.map_or(*pitch, |bp| bp.min(*pitch)));
+        }
+    }
+    (w, bass)
+}
+
+fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "event.extract_chords";
+    let (_, t0, t1) = selection_ticks(e, p, id)?;
+    let s = e.session();
+    let picked = tracks_param(e, id, p)?;
+    let mut tracks: Vec<TrackId> = picked.into_iter().filter(|t| s.track(*t).is_some_and(|x| x.kind.is_midi())).collect();
+    if tracks.is_empty() {
+        tracks = s.tracks.iter().filter(|t| t.kind.is_midi()).map(|t| t.id).collect();
+    }
+    // Absolute (tick) notes from every MIDI clip on those tracks, cut to their clip.
+    let notes = midi_tick_notes(s, &tracks);
     let mut bar = s.tempo.bar_beat_at_tick(t0).bar;
     let mut sounding: Vec<(i64, i64, u8)> = Vec::new();
     let (mut next, mut bars, mut heard) = (0, 0, 0);
@@ -613,17 +647,7 @@ fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         bars += 1;
         heard += sounding.len();
-        let mut w = [0.0f64; 12];
-        let mut bass: Option<u8> = None;
-        for (na, nb, pitch) in &sounding {
-            let ov = (*nb).min(b) - (*na).max(a);
-            if ov > 0 {
-                if let Some(x) = w.get_mut(usize::from(*pitch) % 12) {
-                    *x += ov as f64;
-                }
-                bass = Some(bass.map_or(*pitch, |bp| bp.min(*pitch)));
-            }
-        }
+        let (w, bass) = pitch_class_weights(&sounding, a, b);
         if let Some(name) = bass.and_then(|bp| chord_name(&w, usize::from(bp) % 12)) {
             let at = s.tempo.tick_to_samples(a, s.sample_rate);
             chords.push(json!({"bar": bar, "chord": name, "at": at}));
@@ -782,7 +806,6 @@ fn retro_record(e: &mut Engine, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn midi_engine() -> (Engine, TrackId) {
         let mut e = Engine::default();
         e.execute("track.new", &json!({"kind": "midi"})).unwrap();
@@ -886,6 +909,15 @@ mod tests {
         }
     }
 
+    /// For `event.tempo_stretch`, `length` is the new length of the selection, so the selection stays the range.
+    #[test]
+    fn tempo_stretch_length_keeps_selection_range() {
+        let mut e = Engine::default();
+        e.session_mut().edit.selection = Range::new(0, 96_000);
+        e.execute("event.tempo_stretch", &json!({"length": 192_000})).unwrap();
+        assert_eq!(e.session().tempo.tempo_at_tick(0), 60.0);
+    }
+
     #[test]
     fn tempo_curves() {
         let mut e = Engine::default();
@@ -928,6 +960,44 @@ mod tests {
         let nt = e.session().tracks.iter().find(|x| x.id != t).unwrap();
         match &nt.clips()[0].content {
             ClipContent::Midi { sequence } => assert_eq!(sequence.notes[0].pitch, 72),
+            _ => panic!(),
+        }
+    }
+
+    /// Note-split copies only the notes in the pitch range. SysEx already on the clip stays there;
+    /// the new clip's sysex list is empty (storytold/soundcraft#1618 owns split/trim of packets).
+    #[test]
+    fn note_split_leaves_sysex_on_the_source_clip() {
+        let (mut e, t) = midi_engine();
+        let r = e
+            .execute(
+                "event.retrospective_record",
+                &json!({"track": t.0, "notes": [{"pitch": 36, "start_ticks": 0}, {"pitch": 72, "start_ticks": 0}]}),
+            )
+            .unwrap();
+        let cid = r["clip"].as_u64().unwrap();
+        let packet = soundcraft_midi::SysExEvent { tick: 0, status: 0xF0, data: vec![0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7] };
+        if let Some(c) = e.session_mut().find_clip_mut(ClipId(cid))
+            && let ClipContent::Midi { sequence } = &mut c.content
+        {
+            sequence.sysex.push(packet.clone());
+        }
+        e.execute("edit.select", &json!({"clips": [cid]})).unwrap();
+        e.execute("event.select_split_notes", &json!({"pitch_from": 60, "pitch_to": 127, "action": "split"})).unwrap();
+        let source = e.session().find_clip(ClipId(cid)).map(|(_, c)| c.clone()).unwrap();
+        match &source.content {
+            ClipContent::Midi { sequence } => {
+                assert_eq!(sequence.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![36]);
+                assert_eq!(sequence.sysex, vec![packet]);
+            }
+            _ => panic!(),
+        }
+        let nt = e.session().tracks.iter().find(|x| x.id != t).unwrap();
+        match &nt.clips()[0].content {
+            ClipContent::Midi { sequence } => {
+                assert_eq!(sequence.notes[0].pitch, 72);
+                assert!(sequence.sysex.is_empty());
+            }
             _ => panic!(),
         }
     }

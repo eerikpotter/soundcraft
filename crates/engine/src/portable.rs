@@ -1,7 +1,7 @@
 //! Portable session archive: native metadata and every decoded audio source, without paths
 //! outside the archive. No filesystem access is used when reading or writing this format.
 use cloud_zip as zip;
-use soundcraft_audio_io::AudioBuffer;
+use craft_audio::AudioBuffer;
 use soundcraft_model::{Session, SourceAudio};
 use std::{
     collections::BTreeSet,
@@ -187,7 +187,7 @@ mod tests {
     fn portable_audio_preserves_float_headroom_exactly() {
         let mut session = Session::default();
         let buffer = AudioBuffer { sample_rate: 48_000, channels: vec![vec![2.5, -3.25, 0.0, -0.0, f32::MIN_POSITIVE]] };
-        let id = crate::io::add_source(&mut session, "Headroom", buffer.clone(), None, soundcraft_audio_io::FileFormat::Wav);
+        let id = crate::io::add_source(&mut session, "Headroom", buffer.clone(), None, soundcraft_model::FileFormat::Wav);
         let decoded = decode(&encode(&session).unwrap()).unwrap();
         let actual = &decoded.pool.get(id).unwrap().buffer;
         assert_eq!(
@@ -207,7 +207,7 @@ mod tests {
         assert!(decode(b"not a project").is_err());
         for hostile_length in [false, true] {
             let mut session = Session::default();
-            crate::io::add_source(&mut session, "One", AudioBuffer::new(48_000, 1, 1), None, soundcraft_audio_io::FileFormat::Wav);
+            crate::io::add_source(&mut session, "One", AudioBuffer::new(48_000, 1, 1), None, soundcraft_model::FileFormat::Wav);
             let source = &mut session.sources[0];
             source.path = if hostile_length { format!("audio/{}.f32", source.id.0) } else { "../../outside.f32".into() };
             if hostile_length {

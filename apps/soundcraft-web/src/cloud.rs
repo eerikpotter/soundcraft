@@ -1,12 +1,12 @@
 //! Cloud uses a portable native session containing the source audio, not a flattened mix.
 use sovereign_cloud_ui::{DocumentState, Editor, Snapshot};
-pub struct Adapter<'a>(pub &'a mut soundcraft_ui_egui::SoundApp);
+pub struct Adapter<'a>(pub &'a mut soundcraft_ui_egui::SoundApp, pub &'a crate::cloud_revision::RevisionTracker);
 impl Editor for Adapter<'_> {
     fn document(&self) -> Option<DocumentState> {
         let e = &self.0.engine;
         Some(DocumentState {
             id: e.document_id(),
-            revision: e.revision,
+            revision: self.1.observe(e),
             name: e.session().name.clone(),
             dirty: e.is_dirty() || e.transport.recording,
         })

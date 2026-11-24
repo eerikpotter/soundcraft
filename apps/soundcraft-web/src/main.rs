@@ -33,3 +33,6 @@ fn main() {
 
 #[cfg(all(target_arch = "wasm32", feature = "icp-cloud"))]
 mod cloud;
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "icp-cloud")))]
+mod cloud_revision;
